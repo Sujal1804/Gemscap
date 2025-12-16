@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Play, Square, Activity, AlertTriangle, Zap, TrendingUp, BarChart2, Radio, Download } from 'lucide-react'
+import { Play, Square, Activity, AlertTriangle, Zap, TrendingUp, BarChart2, Radio, Download, UploadCloud } from 'lucide-react'
 import { 
   LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
   ComposedChart, Bar, Cell, Label
@@ -50,6 +50,8 @@ function App() {
   const [error, setError] = useState(null)
   const [adfResult, setAdfResult] = useState(null)
   const [adfLoading, setAdfLoading] = useState(false)
+  const [uploadFile, setUploadFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
   
   useEffect(() => {
     checkStatus()
@@ -131,6 +133,37 @@ function App() {
        setError("Export failed")
     }
   }
+   
+   const handleUpload = async () => {
+      console.log("Upload button clicked")
+      if (!uploadFile) {
+          console.log("No file selected")
+          return
+      }
+      console.log("Uploading file:", uploadFile.name)
+      setUploading(true)
+      const formData = new FormData()
+      formData.append('file', uploadFile)
+      formData.append('symbol', config.symbol_a) // Default to Symbol A for now, could be selectable
+      formData.append('timeframe', config.timeframe)
+      
+      try {
+         console.log("Sending request to /pipeline/upload...")
+         const res = await axios.post('http://localhost:8000/pipeline/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+         })
+         console.log("Upload response:", res.data)
+         alert("Upload successful! " + res.data.rows_inserted + " rows inserted.")
+         setUploadFile(null)
+         // Trigger refresh
+         fetchData()
+      } catch (err) {
+         console.error("Upload failed", err)
+         alert("Upload failed: " + (err.response?.data?.detail || err.message))
+      } finally {
+         setUploading(false)
+      }
+   }
 
   const handleRunADF = async () => {
     setAdfLoading(true)
@@ -191,17 +224,38 @@ function App() {
           </div>
           
           <div className="flex items-center gap-4">
-             <div className={cn(
-                "flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono border",
-                status.running 
-                   ? "bg-green-500/10 border-green-500/20 text-green-400" 
-                   : "bg-slate-800 border-slate-700 text-slate-500"
-             )}>
-                <span className={cn("w-2 h-2 rounded-full", status.running ? "bg-green-400 animate-pulse" : "bg-slate-600")} />
-                {status.running ? "SYSTEM ACTIVE" : "SYSTEM IDLE"}
-             </div>
-          </div>
+              <div className={cn(
+                 "flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono border",
+                 status.running 
+                    ? "bg-green-500/10 border-green-500/20 text-green-400" 
+                    : "bg-slate-800 border-slate-700 text-slate-500"
+              )}>
+                 <span className={cn("w-2 h-2 rounded-full", status.running ? "bg-green-400 animate-pulse" : "bg-slate-600")} />
+                 {status.running ? "SYSTEM ACTIVE" : "SYSTEM IDLE"}
+              </div>
+           </div>
         </div>
+        
+        {/* Active Pipelines Bar */}
+        {status.active_pairs && status.active_pairs.length > 0 && (
+            <div className="max-w-[1600px] mx-auto px-6 pb-2 flex gap-2 overflow-x-auto">
+                {status.active_pairs.map(p => (
+                    <button
+                        key={p.key}
+                        onClick={() => setConfig({...config, symbol_a: p.symbols[0], symbol_b: p.symbols[1]})}
+                        className={cn(
+                            "flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-mono transition-all",
+                            (config.symbol_a === p.symbols[0] && config.symbol_b === p.symbols[1])
+                                ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-200"
+                                : "bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700"
+                        )}
+                    >
+                        <Zap size={10} className={cn((config.symbol_a === p.symbols[0] && config.symbol_b === p.symbols[1]) ? "text-cyan-400" : "text-slate-600")} />
+                        {p.symbols[0].toUpperCase()}-{p.symbols[1].toUpperCase()}
+                    </button>
+                ))}
+            </div>
+        )}
       </nav>
 
       <div className="max-w-[1600px] mx-auto p-6 grid grid-cols-12 gap-6">
@@ -234,22 +288,42 @@ function App() {
                     </div>
                  </div>
                  
+                 <div className="space-y-1">
+                       <label className="text-xs text-slate-500 font-medium ml-1">Regression Method</label>
+                       <select 
+                          value={config.regression_type || 'ols'}
+                          onChange={e => setConfig({...config, regression_type: e.target.value})}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-300 font-mono focus:outline-none focus:border-slate-500/50 transition-colors appearance-none cursor-pointer" 
+                       >
+                          <option value="ols">OLS (Ordinary Least Squares)</option>
+                          <option value="huber">Robust (Huber Regression)</option>
+                       </select>
+                    </div>
+
                  <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
                        <label className="text-xs text-slate-500 font-medium ml-1">Symbol A</label>
-                       <input 
+                       <select 
                           value={config.symbol_a}
                           onChange={e => setConfig({...config, symbol_a: e.target.value})}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-cyan-500 font-mono focus:outline-none focus:border-cyan-500/50 transition-colors"
-                       />
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-cyan-500 font-mono focus:outline-none focus:border-cyan-500/50 transition-colors appearance-none cursor-pointer"
+                       >
+                          {['btcusdt', 'ethusdt', 'solusdt', 'bnbusdt', 'xrpusdt', 'adausdt', 'dogeusdt', 'avaxusdt', 'dotusdt', 'maticusdt', 'ltcusdt', 'uniusdt', 'linkusdt'].map(s => (
+                             <option key={s} value={s}>{s.toUpperCase()}</option>
+                          ))}
+                       </select>
                     </div>
                     <div className="space-y-1">
                        <label className="text-xs text-slate-500 font-medium ml-1">Symbol B</label>
-                       <input 
+                       <select 
                           value={config.symbol_b}
                           onChange={e => setConfig({...config, symbol_b: e.target.value})}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-blue-500 font-mono focus:outline-none focus:border-blue-500/50 transition-colors" 
-                       />
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-blue-500 font-mono focus:outline-none focus:border-blue-500/50 transition-colors appearance-none cursor-pointer" 
+                       >
+                          {['btcusdt', 'ethusdt', 'solusdt', 'bnbusdt', 'xrpusdt', 'adausdt', 'dogeusdt', 'avaxusdt', 'dotusdt', 'maticusdt', 'ltcusdt', 'uniusdt', 'linkusdt'].map(s => (
+                             <option key={s} value={s}>{s.toUpperCase()}</option>
+                          ))}
+                       </select>
                     </div>
                  </div>
 
@@ -593,7 +667,29 @@ function App() {
                         </div>
                      )}
                   </div>
-               </div>
+
+                  <div className="pt-4 border-t border-slate-800">
+                      <label className="text-xs text-slate-500 font-medium ml-1 block mb-2">Upload OHLC Data (CSV/JSON)</label>
+                      <div className="flex gap-2">
+                          <input 
+                              type="file" 
+                              accept=".csv,.json,.ndjson"
+                              onChange={e => setUploadFile(e.target.files[0])}
+                              className="text-[10px] text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-slate-800 file:text-slate-300 hover:file:bg-slate-700 w-full"
+                          />
+                          <button
+                              onClick={handleUpload}
+                              disabled={!uploadFile || uploading}
+                              className="bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 p-1.5 rounded transition-colors disabled:opacity-50"
+                          >
+                              {uploading ? <Activity className="animate-spin" size={14}/> : <UploadCloud size={14}/>}
+                          </button>
+                      </div>
+                      <p className="text-[9px] text-slate-600 mt-1">
+                          Upload for current Symbol A. Required cols: timestamp, open, high, low, close, volume.
+                      </p>
+                  </div>
+              </div>
            </div>
            
         </div>

@@ -11,6 +11,11 @@ class PairsAnalytics:
     def __init__(self):
         pass
     
+    def calculate_hedge_ratio(self, price_a: pd.Series, price_b: pd.Series, method: str = 'ols') -> Tuple[float, float, float]:
+        if method == 'huber':
+            return self.calculate_hedge_ratio_huber(price_a, price_b)
+        return self.calculate_hedge_ratio_ols(price_a, price_b)
+
     def calculate_hedge_ratio_ols(self, price_a: pd.Series, price_b: pd.Series) -> Tuple[float, float, float]:
         df = pd.DataFrame({'a': price_a, 'b': price_b}).dropna()
         
@@ -30,6 +35,39 @@ class PairsAnalytics:
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
         
         return float(beta), float(alpha), float(r_squared)
+    
+    def calculate_hedge_ratio_huber(self, price_a: pd.Series, price_b: pd.Series) -> Tuple[float, float, float]:
+        try:
+            import statsmodels.api as sm
+            
+            df = pd.DataFrame({'a': price_a, 'b': price_b}).dropna()
+            
+            if len(df) < 2:
+                return 0.0, 0.0, 0.0
+            
+            X = sm.add_constant(df['b'])
+            y = df['a']
+            
+            model = sm.RLM(y, X, M=sm.robust.norms.HuberT())
+            results = model.fit()
+            
+            alpha = results.params['const']
+            beta = results.params['b']
+            
+            # R2 is not well-defined for RLM, using weighted R2 or similar approximation
+            # Here we calculate a pseudo-R2 based on the weighted residuals if available,
+            # but for simplicity/speed/robustness similarity to OLS, we'll return 0.0 or
+            # calculate standard R2 on the fitted values.
+            # Using simple R2 of predictions:
+            y_pred = results.fittedvalues
+            ss_res = np.sum((y - y_pred) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+            
+            return float(beta), float(alpha), float(r_squared)
+        except Exception as e:
+            logger.error(f"Huber regression failed: {e}")
+            return self.calculate_hedge_ratio_ols(price_a, price_b)
     
     def calculate_rolling_hedge_ratio(self, price_a: pd.Series, price_b: pd.Series, window: int) -> pd.DataFrame:
         df = pd.DataFrame({'a': price_a, 'b': price_b}).dropna()

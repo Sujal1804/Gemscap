@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -26,8 +26,9 @@ class AnalyticsRequest(BaseModel):
     window: int = 20
     limit: int = 200
     z_score_threshold: float = 2.0
+    regression_type: str = 'ols'
 
-pipeline: Optional[MarketDataPipeline] = None
+pipelines: Dict[str, MarketDataPipeline] = {}
 pipeline_lock = asyncio.Lock()
 
 @asynccontextmanager
@@ -35,9 +36,10 @@ async def lifespan(app: FastAPI):
     print("Starting up FastAPI backend...")
     yield
     print("Shutting down...")
-    global pipeline
-    if pipeline:
-        await pipeline.stop()
+    global pipelines
+    for key, p in pipelines.items():
+        if p and p.running:
+            await p.stop()
 
 app = FastAPI(title="Gemscap API", lifespan=lifespan)
 print("--------------------------------------------------")
@@ -58,48 +60,69 @@ async def root():
 
 @app.post("/pipeline/start")
 async def start_pipeline(config: PipelineConfig, background_tasks: BackgroundTasks):
-    global pipeline
+    global pipelines
     
     if not config.symbol_a or not config.symbol_b:
         raise HTTPException(status_code=400, detail="Symbols cannot be empty")
-        
+    
+    key = f"{config.symbol_a.lower()}-{config.symbol_b.lower()}"
+    
     async with pipeline_lock:
-        if pipeline and pipeline.running:
-            return {"status": "already_running", "message": "Pipeline is already running"}
+        if key in pipelines and pipelines[key].running:
+             return {"status": "already_running", "message": f"Pipeline for {key} is already running"}
             
-        pipeline = MarketDataPipeline(
+        p = MarketDataPipeline(
             symbols=[config.symbol_a.lower(), config.symbol_b.lower()],
             db_path="market_data.db"
         )
+        pipelines[key] = p
         
-        background_tasks.add_task(pipeline.start, config.timeframes)
+        background_tasks.add_task(p.start, config.timeframes)
         
-        return {"status": "started", "symbols": [config.symbol_a, config.symbol_b]}
+        return {"status": "started", "symbols": [config.symbol_a, config.symbol_b], "key": key}
 
 @app.post("/pipeline/stop")
-async def stop_pipeline():
-    global pipeline
+async def stop_pipeline(symbol_a: Optional[str] = None, symbol_b: Optional[str] = None):
+    global pipelines
     async with pipeline_lock:
-        if pipeline and pipeline.running:
-            await pipeline.stop()
-            return {"status": "stopped"}
-        return {"status": "not_running", "message": "Pipeline is not running"}
+        if symbol_a and symbol_b:
+             key = f"{symbol_a.lower()}-{symbol_b.lower()}"
+             if key in pipelines and pipelines[key].running:
+                 await pipelines[key].stop()
+                 del pipelines[key]
+                 return {"status": "stopped", "key": key}
+             return {"status": "not_running", "message": "Pipeline not found or not running"}
+        else:
+            # Stop all
+            count = 0
+            for key in list(pipelines.keys()):
+                if pipelines[key].running:
+                    await pipelines[key].stop()
+                    count += 1
+                del pipelines[key]
+            return {"status": "stopped_all", "count": count}
 
 @app.get("/pipeline/status")
 async def get_status():
-    global pipeline
-    if pipeline and pipeline.running:
-        return {
-            "running": True,
-            "symbols": pipeline.symbols
-        }
-    return {"running": False}
+    global pipelines
+    active_pairs = []
+    for key, p in pipelines.items():
+        if p.running:
+            active_pairs.append({
+                "key": key,
+                "symbols": p.symbols
+            })
+    return {
+        "running": len(active_pairs) > 0,
+        "active_pairs": active_pairs
+    }
 
 @app.post("/analytics")
 async def get_analytics(req: AnalyticsRequest):
-    global pipeline
+    global pipelines
     
-    req_pipeline = pipeline
+    key = f"{req.symbol_a.lower()}-{req.symbol_b.lower()}"
+    req_pipeline = pipelines.get(key)
     created_temp = False
     
     if not req_pipeline:
@@ -116,7 +139,8 @@ async def get_analytics(req: AnalyticsRequest):
             req.symbol_b.lower(),
             req.timeframe,
             req.window,
-            req.limit
+            req.limit,
+            req.regression_type
         )
         
         if not analytics:
@@ -202,6 +226,12 @@ async def get_analytics(req: AnalyticsRequest):
         
     except Exception as e:
         import traceback
+        with open("backend_error.log", "a") as f:
+            f.write(f"Timestamp: {datetime.now()}\n")
+            f.write(f"Endpoint: /analytics\n") 
+            traceback.print_exc(file=f)
+            f.write("\n")
+        print(f"Error in /analytics: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -210,9 +240,10 @@ async def get_analytics(req: AnalyticsRequest):
 
 @app.post("/analytics/export")
 async def export_analytics(request: AnalyticsRequest):
-    global pipeline
+    global pipelines
     
-    req_pipeline = pipeline
+    key = f"{request.symbol_a.lower()}-{request.symbol_b.lower()}"
+    req_pipeline = pipelines.get(key)
     created_temp = False
     
     if not req_pipeline:
@@ -229,7 +260,8 @@ async def export_analytics(request: AnalyticsRequest):
             request.symbol_b.lower(),
             request.timeframe,
             request.window,
-            request.limit
+            request.limit,
+            request.regression_type
         )
         
         if not data:
@@ -256,8 +288,10 @@ async def export_analytics(request: AnalyticsRequest):
 
 @app.post("/analytics/adf")
 async def run_adf_test(req: AnalyticsRequest):
-    global pipeline
-    req_pipeline = pipeline
+    global pipelines
+    
+    key = f"{req.symbol_a.lower()}-{req.symbol_b.lower()}"
+    req_pipeline = pipelines.get(key)
     created_temp = False
 
     try:
@@ -275,7 +309,8 @@ async def run_adf_test(req: AnalyticsRequest):
             req.symbol_b.lower(),
             req.timeframe,
             req.window,
-            req.limit
+            req.limit,
+            req.regression_type
         )
         
         if not analytics or analytics.get('spread') is None or analytics.get('spread').empty:
@@ -320,6 +355,47 @@ async def run_adf_test(req: AnalyticsRequest):
         if created_temp and req_pipeline:
             req_pipeline.close()
 
+@app.post("/pipeline/upload")
+async def upload_ohlc(file: UploadFile = File(...), symbol: str = Form(...), timeframe: str = Form(...)):
+    if not symbol or not timeframe:
+        raise HTTPException(status_code=400, detail="Symbol and timeframe are required")
+    
+    try:
+        content = await file.read()
+        
+        df = None
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(content))
+        elif file.filename.endswith('.json') or file.filename.endswith('.ndjson'):
+            df = pd.read_json(io.BytesIO(content), orient='records' if file.filename.endswith('.json') else 'records', lines=file.filename.endswith('.ndjson'))
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV or JSON.")
+        
+        # Validate columns
+        required_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        if not all(col in df.columns for col in required_cols):
+             # Try case-insensitive mapping
+             df.columns = [c.lower() for c in df.columns]
+             if not all(col in df.columns for col in required_cols):
+                 raise HTTPException(status_code=400, detail=f"Missing required columns: {required_cols}")
+        
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df['symbol'] = symbol.lower()
+        # Ensure timeframe matches the target bucket if needed, or just trust user input for now
+        
+        ds = DataStore("market_data.db")
+        try:
+             ds.insert_resampled(df, timeframe)
+        finally:
+             ds.close()
+             
+        return {"status": "success", "rows_inserted": len(df), "symbol": symbol, "timeframe": timeframe}
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+        
 @app.get("/alerts")
 async def get_alerts(limit: int = 50):
     ds = DataStore("market_data.db")

@@ -97,7 +97,7 @@ class MarketDataPipeline:
     def get_resampled_data(self, symbol: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
         return self.data_store.get_resampled(symbol, timeframe, limit=limit)
     
-    def calculate_pairs_analytics(self, symbol_a: str, symbol_b: str, timeframe: str, window: int = 20, limit: int = 500) -> dict:
+    def calculate_pairs_analytics(self, symbol_a: str, symbol_b: str, timeframe: str, window: int = 20, limit: int = 500, regression_type: str = 'ols') -> dict:
         data_a = self.get_resampled_data(symbol_a, timeframe, limit)
         data_b = self.get_resampled_data(symbol_b, timeframe, limit)
         
@@ -112,7 +112,7 @@ class MarketDataPipeline:
         if len(df) < window:
             return {}
         
-        beta, alpha, r_squared = self.analytics.calculate_hedge_ratio_ols(df['a'], df['b'])
+        beta, alpha, r_squared = self.analytics.calculate_hedge_ratio(df['a'], df['b'], method=regression_type)
         spread = self.analytics.calculate_spread(df['a'], df['b'], beta)
         z_score = self.analytics.calculate_z_score(spread, window)
         correlation = self.analytics.calculate_correlation(df['a'], df['b'])
