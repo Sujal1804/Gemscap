@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+websockets
+pandas
+numpy
+statsmodels
+aiofiles
+python-multipart
+streamlit
+plotly
+scipy
