@@ -4,138 +4,89 @@
 
 ```mermaid
 graph TB
-    A[Binance Futures WebSocket] --> B[Data Ingestion Layer]
-    B --> C[Tick Buffer]
-    C --> D[Storage Layer - SQLite]
+    A[Binance Futures WebSocket] --> B[Data Ingestion (FastAPI)]
+    U[User Upload CSV] --> B
+    B --> C[Tick Buffer / DataStore]
+    C --> D[Storage Layer - SQLite (WAL)]
     D --> E[Resampling Engine]
-    E --> F[Analytics Engine]
-    F --> G[Streamlit Dashboard]
+    E --> F[Analytics Engine (Pandas/Statsmodels)]
+    F --> G[FastAPI Endpoints]
     
-    H[User] --> G
-    G --> I[Alert System]
-    G --> J[Data Export]
+    H[User Browser] --> I[React Frontend (Vite)]
+    I -->|HTTP/REST| G
+    I -->|Polling/WS| G
+    G --> J[Alert System]
 ```
 
 ## Detailed Component Architecture
 
 ```mermaid
 graph LR
-    subgraph "Data Collection"
+    subgraph "Backend (FastAPI)"
         WS[WebSocket Client]
-        TB[Tick Buffer]
-        WS -->|Live Ticks| TB
+        API[API Endpoints]
+        PL[Pipeline Manager]
+        
+        subgraph "Core Logic"
+            RS[Resampler]
+            AN[Analytics Engine]
+            DB[(SQLite DB)]
+        end
+        
+        WS -->|Ticks| DB
+        PL -->|Orchestrate| RS
+        PL -->|Orchestrate| AN
+        RS -->|OHLCV| DB
+        AN -->|Metrics| DB
+        DB -->|Query| API
     end
     
-    subgraph "Storage"
-        DB[(SQLite Database)]
-        TB -->|Batch Insert| DB
+    subgraph "Frontend (React)"
+        UI[Dashboard UI]
+        CH[Recharts]
+        ST[State Management]
+        
+        API -->|JSON| ST
+        ST --> UI
+        UI --> CH
     end
-    
-    subgraph "Processing"
-        RS[Resampler]
-        AN[Analytics]
-        DB -->|Read Ticks| RS
-        RS -->|OHLCV| AN
-    end
-    
-    subgraph "Presentation"
-        UI[Streamlit UI]
-        CH[Plotly Charts]
-        AN -->|Metrics| UI
-        UI -->|Render| CH
-    end
-```
-
-## Data Flow
-
-```mermaid
-sequenceDiagram
-    participant Binance
-    participant Collector
-    participant Buffer
-    participant Database
-    participant Resampler
-    participant Analytics
-    participant Dashboard
-    
-    Binance->>Collector: WebSocket Trade Event
-    Collector->>Buffer: Normalized Tick
-    
-    loop Every 10 seconds
-        Buffer->>Database: Batch Insert Ticks
-    end
-    
-    loop Every 5 seconds
-        Database->>Resampler: Fetch Recent Ticks
-        Resampler->>Database: Store OHLCV Bars
-    end
-    
-    Dashboard->>Database: Query Resampled Data
-    Database->>Dashboard: Return OHLCV
-    Dashboard->>Analytics: Calculate Metrics
-    Analytics->>Dashboard: Return Results
-    Dashboard->>Dashboard: Render Charts
 ```
 
 ## Module Structure
 
 ```
-src/
-├── data_ingestion.py
-│   ├── BinanceWSCollector
-│   │   ├── _subscribe_symbol()
-│   │   ├── normalize_tick()
-│   │   └── start() / stop()
-│   └── TickBuffer
-│       ├── add()
-│       ├── get_all()
-│       └── clear()
+gemscap/
+├── api.py                    # FastAPI Application Entry Point
+├── backend_error.log         # Error Logs
+├── market_data.db            # SQLite Database (WAL Mode)
+├── src/
+│   ├── data_ingestion.py     # Binance WebSocket Client
+│   ├── storage.py            # SQLite DataStore Implementation
+│   ├── resampler.py          # OHLCV Aggregation Logic
+│   ├── analytics.py          # Quant Analytics (OLS, Huber, ADF, Z-Score)
+│   └── pipeline.py           # Multi-Pipeline Manager
 │
-├── storage.py
-│   └── DataStore
-│       ├── insert_tick()
-│       ├── insert_ticks_batch()
-│       ├── get_ticks()
-│       ├── insert_resampled()
-│       ├── get_resampled()
-│       └── log_alert()
-│
-├── resampler.py
-│   ├── DataResampler
-│   │   ├── resample_ticks()
-│   │   └── get_latest_bars()
-│   └── RollingCalculator
-│       ├── rolling_mean()
-│       ├── rolling_std()
-│       └── rolling_correlation()
-│
-├── analytics.py
-│   └── PairsAnalytics
-│       ├── calculate_hedge_ratio_ols()
-│       ├── calculate_spread()
-│       ├── calculate_z_score()
-│       ├── calculate_correlation()
-│       ├── adf_test()
-│       └── calculate_half_life()
-│
-└── pipeline.py
-    └── MarketDataPipeline
-        ├── start()
-        ├── stop()
-        ├── get_resampled_data()
-        └── calculate_pairs_analytics()
+└── frontend/                 # React Application
+    ├── src/
+    │   ├── App.jsx           # Main Dashboard Component
+    │   ├── main.jsx          # React Entry Point
+    │   └── assets/           # Static Assets
+    ├── package.json          # Frontend Dependencies
+    └── vite.config.js        # Vite Configuration
 ```
 
 ## Technology Stack
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Frontend** | Streamlit | Interactive web UI |
-| **Visualization** | Plotly | Real-time charts |
-| **Data Processing** | Pandas | Time series manipulation |
-| **Statistics** | NumPy, SciPy, Statsmodels | Numerical computing |
-| **Storage** | SQLite | Persistent data |
-| **Async I/O** | asyncio, websockets | Live data collection |
+| **Frontend** | React 18, Vite | High-performance SPA with Virtual DOM |
+| **Styling** | TailwindCSS | Modern utility-first CSS |
+| **Visualization** | Recharts | Responsive, composable charts |
+| **Backend** | FastAPI (Python 3.9+) | Async API framework |
+| **Data Processing** | Pandas, NumPy | vectorized data manipulation |
+| **Statistics** | Statsmodels, SciPy | OLS/Huber regression, ADF tests |
+| **Storage** | SQLite (WAL Mode) | High-concurrency local database |
+| **Ingestion** | Websockets (Asyncio) | Real-time market data feed |
 
 ## Database Schema
 
@@ -149,7 +100,6 @@ CREATE TABLE ticks (
     size REAL NOT NULL,
     is_buyer_maker INTEGER
 );
-
 CREATE INDEX idx_symbol_timestamp ON ticks(symbol, timestamp);
 ```
 
@@ -168,7 +118,6 @@ CREATE TABLE resampled (
     trade_count INTEGER,
     UNIQUE(symbol, timeframe, timestamp)
 );
-
 CREATE INDEX idx_resampled_lookup ON resampled(symbol, timeframe, timestamp);
 ```
 
@@ -185,191 +134,80 @@ CREATE TABLE alerts (
 );
 ```
 
-## Analytics Pipeline
+## Analytics Pipeline Flow
 
 ```mermaid
 graph TD
-    A[Price Series A & B] --> B[OLS Regression]
-    B --> C[Hedge Ratio β]
-    C --> D[Calculate Spread]
-    D --> E[Rolling Mean & Std]
-    E --> F[Z-Score]
-    F --> G{|Z| > Threshold?}
-    G -->|Yes| H[Trigger Alert]
-    G -->|No| I[Continue Monitoring]
+    A[Raw Ticks] --> B[Resampler (1s/1m/5m)]
+    B --> C[Align Time Series (A & B)]
+    C --> D[Regression (OLS or Huber)]
+    D --> E[Calculate Hedge Ratio β]
+    E --> F[Calculate Spread = A - β*B]
+    F --> G[Rolling Z-Score]
+    G --> H{Z > Threshold?}
+    H -->|Yes| I[Trigger Alert]
+    H -->|No| J[Wait]
     
-    A --> J[Rolling Correlation]
-    D --> K[ADF Test]
-    K --> L{Stationary?}
-    L -->|Yes| M[Good for Trading]
-    L -->|No| N[Poor Pair]
+    C --> K[ADF Stationarity Test]
+    C --> L[Half-Life Calculation]
 ```
 
-## Scaling Architecture (Production)
+## Production Scaling Path
 
 ```mermaid
 graph TB
-    subgraph "Data Ingestion"
-        WS1[WebSocket 1]
-        WS2[WebSocket 2]
-        WSN[WebSocket N]
+    subgraph "Ingestion Layer"
+        WS[WebSocket Cluster] --> K[Kafka]
     end
     
-    WS1 --> KF[Kafka]
-    WS2 --> KF
-    WSN --> KF
+    subgraph "Processing Layer"
+        K --> S[Spark/Flink Streaming]
+        S --> T[(TimescaleDB)]
+        S --> R[(Redis Cache)]
+    end
     
-    KF --> FL[Apache Flink]
-    FL --> TS[(TimescaleDB)]
-    FL --> RD[(Redis Cache)]
+    subgraph "Serving Layer"
+        API[FastAPI Cluster]
+        T --> API
+        R --> API
+    end
     
-    TS --> API[FastAPI Backend]
-    RD --> API
-    
-    API --> WEB[React Frontend]
-    API --> WS_OUT[WebSocket Updates]
-    WS_OUT --> WEB
+    subgraph "Presentation"
+        WEB[React/Next.js App]
+        API --> WEB
+    end
 ```
-
-## Performance Considerations
-
-### Current System (Single Machine)
-- **Latency**: ~500ms tick-to-chart
-- **Throughput**: ~1000 ticks/second
-- **Storage**: Limited by disk I/O
-- **Scalability**: Vertical only
-
-### Bottlenecks
-1. **SQLite Write Locks**: Single writer at a time
-2. **Pandas Memory**: Entire dataset in RAM
-3. **Streamlit Refresh**: Full page reload
-4. **Synchronous Processing**: Blocks on calculations
-
-### Production Improvements
-
-| Component | Current | Production | Benefit |
-|-----------|---------|-----------|---------|
-| Ingestion | Single thread | Kafka cluster | Distributed, fault-tolerant |
-| Storage | SQLite | TimescaleDB | Time-series optimized |
-| Processing | Pandas batch | Flink streaming | Real-time aggregation |
-| Cache | None | Redis | Sub-millisecond reads |
-| API | Streamlit | FastAPI + WebSocket | True real-time push |
-| Frontend | Streamlit | React SPA | Smooth updates, no reload |
 
 ## Security Considerations
 
 ### Current Implementation
-- ✅ Read-only WebSocket connection
-- ✅ Local database (no network exposure)
-- ✅ No API keys required
-- ⚠️ No authentication
-- ⚠️ No encryption
-- ⚠️ No rate limiting
+- **CORS Configured**: API restricts access to trusted frontend origins.
+- **Input Sanitation**: NumPy types converted to native Python types to prevent JSON serialization attacks/crashes.
+- **Local Isolation**: Database is file-based and not exposed to the internet.
 
-### Production Requirements
-- 🔐 User authentication (OAuth2)
-- 🔐 API key management
-- 🔐 TLS/SSL encryption
-- 🔐 Rate limiting per user
-- 🔐 Input validation
-- 🔐 SQL injection prevention
-- 🔐 CORS policies
-
-## Monitoring & Observability
-
-### Recommended Additions
-```mermaid
-graph LR
-    APP[Application] --> PROM[Prometheus]
-    PROM --> GRAF[Grafana]
-    APP --> LOG[Logging]
-    LOG --> ELK[ELK Stack]
-    APP --> TRACE[Tracing]
-    TRACE --> JAEGER[Jaeger]
-```
-
-### Key Metrics to Track
-- **Ingestion Rate**: Ticks/second
-- **Processing Latency**: Time from tick to chart
-- **Database Size**: Growth rate
-- **Memory Usage**: Pandas DataFrame size
-- **Error Rate**: Failed calculations
-- **WebSocket Reconnects**: Connection stability
+### Future Requirements
+- **JWT Authentication**: Secure user sessions.
+- **Rate Limiting**: Prevent API abuse.
+- **HTTPS**: Encrypt transport layer.
 
 ## Deployment Options
 
-### Option 1: Local Development (Current)
-```bash
-python -m streamlit run app.py
+### Option 1: Development (Current)
+- Backend: `uvicorn api:app --reload`
+- Frontend: `npm run dev`
+
+### Option 2: Docker Composition
+```yaml
+services:
+  backend:
+    build: .
+    command: uvicorn api:app --host 0.0.0.0
+  frontend:
+    build: ./frontend
+    command: serve -s build
 ```
-- ✅ Simple
-- ✅ Fast iteration
-- ❌ Single user
-- ❌ Not persistent
-
-### Option 2: Docker Container
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["streamlit", "run", "app.py"]
-```
-- ✅ Reproducible
-- ✅ Portable
-- ✅ Easy deployment
-
-### Option 3: Cloud Deployment
-- **Streamlit Cloud**: Free tier available
-- **Heroku**: Simple deployment
-- **AWS/GCP/Azure**: Full control
-- **Docker + Kubernetes**: Enterprise scale
-
-## Future Enhancements
-
-### Phase 1: Core Improvements
-- [ ] Persistent background worker
-- [ ] Historical data backfill
-- [ ] Multi-pair portfolio view
-- [ ] Performance metrics (Sharpe, drawdown)
-
-### Phase 2: Advanced Analytics
-- [ ] Kalman filter hedge ratio
-- [ ] VECM cointegration test
-- [ ] Machine learning prediction
-- [ ] Order book analysis
-
-### Phase 3: Production Ready
-- [ ] Migrate to TimescaleDB
-- [ ] React frontend
-- [ ] WebSocket real-time updates
-- [ ] User authentication
-- [ ] Backtesting engine
-
-### Phase 4: Enterprise Scale
-- [ ] Kafka message broker
-- [ ] Apache Flink streaming
-- [ ] Microservices architecture
-- [ ] Load balancing
-- [ ] Multi-region deployment
 
 ## References
-
-### Academic Papers
-- Gatev, E., Goetzmann, W.N., & Rouwenhorst, K.G. (2006). "Pairs Trading: Performance of a Relative-Value Arbitrage Rule"
-- Engle, R.F., & Granger, C.W. (1987). "Co-integration and Error Correction"
-
-### Books
-- Chan, E. (2013). "Algorithmic Trading: Winning Strategies and Their Rationale"
-- Jansen, S. (2020). "Machine Learning for Algorithmic Trading"
-
-### Tools & Frameworks
-- Streamlit: https://streamlit.io/
-- Plotly: https://plotly.com/python/
-- Statsmodels: https://www.statsmodels.org/
-- Binance API: https://binance-docs.github.io/apidocs/
-
----
-
-*Architecture designed for educational demonstration and production scaling path*
+- **FastAPI**: https://fastapi.tiangolo.com/
+- **React**: https://react.dev/
+- **Statsmodels (Robust Regression)**: https://www.statsmodels.org/stable/rlm.html
