@@ -5,6 +5,8 @@ __pycache__/
 .Python
 *.db
 *.sqlite
+*.db-shm
+*.db-wal
 *.sqlite3
 *.ndjson
 venv/

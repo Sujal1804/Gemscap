@@ -48,6 +48,8 @@ function App() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [adfResult, setAdfResult] = useState(null)
+  const [adfLoading, setAdfLoading] = useState(false)
   
   useEffect(() => {
     checkStatus()
@@ -75,7 +77,10 @@ function App() {
         z_score_threshold: parseFloat(config.threshold)
       })
       setData(res.data)
-      setError(null)
+      // Only clear error if it was a fetch error, preserve ADF errors
+      if (error && error !== "ADF Test Failed" && !error.includes("ADF")) {
+          setError(null)
+      }
     } catch (err) {
     }
   }
@@ -124,6 +129,27 @@ function App() {
        link.remove();
     } catch (err) {
        setError("Export failed")
+    }
+  }
+
+  const handleRunADF = async () => {
+    setAdfLoading(true)
+    setAdfResult(null)
+    try {
+      const res = await axios.post(`${API_URL}/analytics/adf`, {
+        symbol_a: config.symbol_a,
+        symbol_b: config.symbol_b,
+        timeframe: config.timeframe, 
+        window: parseInt(config.window),
+        limit: parseInt(config.limit),
+        z_score_threshold: parseFloat(config.threshold)
+      })
+      setAdfResult(res.data)
+    } catch (err) {
+      console.error("ADF Test Error:", err)
+      setError(err.response?.data?.message || "ADF Test Failed")
+    } finally {
+      setAdfLoading(false)
     }
   }
 
@@ -345,46 +371,8 @@ function App() {
                      {data ? ((1 - Math.abs(data.correlation)) * 100).toFixed(1) : 0}%
                   </span>
               </div>
-           </div>
-           
-           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl flex-1 min-h-[200px] flex flex-col">
-              <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                 <AlertTriangle size={14} /> System Alerts
-              </h2>
               
-              <div className="space-y-3 overflow-y-auto max-h-[300px] pr-1 no-scrollbar">
-                 {data?.alerts?.length > 0 ? (
-                    data.alerts.map((alert, idx) => (
-                       <div key={idx} className="group bg-slate-950/40 hover:bg-slate-950/80 border border-slate-800/50 hover:border-rose-500/30 rounded-lg p-3 transition-all">
-                          <div className="flex justify-between items-center mb-1">
-                             <div className="flex items-center gap-2">
-                                <TrendingUp size={12} className="text-rose-400" />
-                                <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">
-                                   {alert.alert_type.replace(/_/g, ' ')}
-                                </span>
-                             </div>
-                             <span className="text-[10px] font-mono text-slate-600 group-hover:text-slate-500">
-                                {new Date(alert.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
-                             </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs text-slate-400 font-mono">
-                                {alert.message.replace('Z-Score Alert: ', '')}
-                            </p>
-                          </div>
-                       </div>
-                    ))
-                 ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-2 py-8">
-                       <div className="p-3 bg-slate-950 rounded-full">
-                          <AlertTriangle size={16} className="opacity-20" />
-                       </div>
-                       <span className="text-xs italic">No active alerts</span>
-                    </div>
-                 )}
-              </div>
            </div>
-
         </div>
 
         <div className="col-span-12 xl:col-span-9 space-y-6">
@@ -517,6 +505,95 @@ function App() {
                  </div>
               </div>
 
+           </div>
+           
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+               <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
+                   <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                         <BarChart2 size={14} /> Stationarity Test (ADF)
+                      </h2>
+                      <button 
+                         onClick={handleRunADF}
+                         disabled={adfLoading || !data}
+                         className="text-xs bg-cyan-600/10 hover:bg-cyan-600/20 text-cyan-400 border border-cyan-500/30 px-3 py-1.5 rounded transition-colors disabled:opacity-50"
+                      >
+                         {adfLoading ? "Running..." : "Run Test"}
+                      </button>
+                   </div>
+
+                   {adfResult ? (
+                      <div className="space-y-4">
+                         <div className="grid grid-cols-2 gap-4">
+                            <div className="bg-slate-950/50 p-4 rounded-lg border border-slate-800">
+                               <span className="text-xs text-slate-500 block mb-1">ADF Statistic</span>
+                               <span className={cn("text-xl font-mono font-bold", adfResult.is_stationary ? "text-emerald-400" : "text-rose-400")}>
+                                  {adfResult.adf_statistic?.toFixed(4)}
+                               </span>
+                            </div>
+                            <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+                               <span className="text-xs text-slate-500 block mb-1">P-Value</span>
+                               <span className="text-xl font-mono font-bold text-slate-300">
+                                  {adfResult.p_value?.toFixed(4)}
+                               </span>
+                            </div>
+                         </div>
+                         <div className={cn(
+                            "p-3 rounded-lg border flex justify-center items-center gap-2",
+                            adfResult.is_stationary 
+                               ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" 
+                               : "bg-rose-500/10 border-rose-500/20 text-rose-400"
+                         )}>
+                            <Activity size={18} />
+                            <span className="font-bold tracking-wider">
+                               {adfResult.is_stationary ? "STATIONARY (MEAN REVERTING)" : "NON-STATIONARY (RANDOM WALK)"}
+                            </span>
+                         </div>
+                      </div>
+                   ) : (
+                      <div className="h-32 flex items-center justify-center text-slate-600 border border-dashed border-slate-800 rounded-lg">
+                         <span className="text-sm">Run test to analyze spread stationarity</span>
+                      </div>
+                   )}
+               </div>
+
+               <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl flex-1 flex flex-col h-full min-h-[250px]">
+                  <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                     <AlertTriangle size={14} /> System Alerts
+                  </h2>
+                  
+                  <div className="space-y-3 overflow-y-auto flex-1 pr-1 custom-scrollbar">
+                     {data?.alerts?.length > 0 ? (
+                        data.alerts.map((alert, idx) => (
+                           <div key={idx} className="group bg-slate-950/40 hover:bg-slate-950/80 border border-slate-800/50 hover:border-rose-500/30 rounded-lg p-3 transition-all">
+                              <div className="flex justify-between items-center mb-1">
+                                 <div className="flex items-center gap-2">
+                                    <TrendingUp size={12} className="text-rose-400" />
+                                    <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">
+                                       {alert.alert_type.replace(/_/g, ' ')}
+                                    </span>
+                                 </div>
+                                 <span className="text-[10px] font-mono text-slate-600 group-hover:text-slate-500">
+                                    {new Date(alert.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
+                                 </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs text-slate-400 font-mono">
+                                    {alert.message.replace('Z-Score Alert: ', '')}
+                                </p>
+                              </div>
+                           </div>
+                        ))
+                     ) : (
+                        <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-2">
+                           <div className="p-3 bg-slate-950 rounded-full">
+                              <AlertTriangle size={16} className="opacity-20" />
+                           </div>
+                           <span className="text-xs italic">No active alerts</span>
+                        </div>
+                     )}
+                  </div>
+               </div>
            </div>
            
         </div>

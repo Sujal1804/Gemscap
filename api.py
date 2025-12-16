@@ -40,6 +40,9 @@ async def lifespan(app: FastAPI):
         await pipeline.stop()
 
 app = FastAPI(title="Gemscap API", lifespan=lifespan)
+print("--------------------------------------------------")
+print("!!! BACKEND LOADED WITH ADF DEBUG SUPPORT !!!")
+print("--------------------------------------------------")
 
 app.add_middleware(
     CORSMiddleware,
@@ -247,6 +250,71 @@ async def export_analytics(request: AnalyticsRequest):
         return response
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        if created_temp and req_pipeline:
+            req_pipeline.close()
+
+@app.post("/analytics/adf")
+async def run_adf_test(req: AnalyticsRequest):
+    global pipeline
+    req_pipeline = pipeline
+    created_temp = False
+
+    try:
+        if not req_pipeline:
+            req_pipeline = MarketDataPipeline(
+                symbols=[req.symbol_a.lower(), req.symbol_b.lower()],
+                db_path="market_data.db"
+            )
+            created_temp = True
+    
+        # Calculate analytics to get spread
+        analytics = await asyncio.to_thread(
+            req_pipeline.calculate_pairs_analytics,
+            req.symbol_a.lower(),
+            req.symbol_b.lower(),
+            req.timeframe,
+            req.window,
+            req.limit
+        )
+        
+        if not analytics or analytics.get('spread') is None or analytics.get('spread').empty:
+            return {"status": "no_data", "message": "Not enough data for ADF test"}
+            
+        # Run ADF test
+        adf_result = await asyncio.to_thread(
+            req_pipeline.run_adf_test,
+            analytics['spread']
+        )
+        
+        print(f"ADF Raw Result: {adf_result}")
+
+        def recursive_sanitize(obj):
+            if isinstance(obj, dict):
+                return {k: recursive_sanitize(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [recursive_sanitize(v) for v in obj]
+            if isinstance(obj, (float, np.floating)):
+                if pd.isna(obj) or np.isnan(obj) or np.isinf(obj):
+                    return None
+                return float(obj)
+            if isinstance(obj, (np.integer, int)):
+                return int(obj)
+            if isinstance(obj, np.bool_):
+                return bool(obj)
+            if isinstance(obj, np.ndarray):
+                return recursive_sanitize(obj.tolist())
+            return obj
+            
+        sanitized_result = recursive_sanitize(adf_result)
+        return sanitized_result
+        
+    except Exception as e:
+        import traceback
+        with open("backend_error.log", "a") as f:
+            f.write(f"Timestamp: {datetime.now()}\n")
+            traceback.print_exc(file=f)
+            f.write("\n")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if created_temp and req_pipeline:
