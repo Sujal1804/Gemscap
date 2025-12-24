@@ -54,11 +54,7 @@ class PairsAnalytics:
             alpha = results.params['const']
             beta = results.params['b']
             
-            # R2 is not well-defined for RLM, using weighted R2 or similar approximation
-            # Here we calculate a pseudo-R2 based on the weighted residuals if available,
-            # but for simplicity/speed/robustness similarity to OLS, we'll return 0.0 or
-            # calculate standard R2 on the fitted values.
-            # Using simple R2 of predictions:
+            
             y_pred = results.fittedvalues
             ss_res = np.sum((y - y_pred) ** 2)
             ss_tot = np.sum((y - np.mean(y)) ** 2)
